@@ -1,6 +1,7 @@
 #include "precompiled.h"
 #include "build_info.h"
 #include <type_traits>
+#include <unistd.h>
 
 cvar_t g_meta_version = { "metamod_version", APP_VERSION, FCVAR_SERVER, 0, nullptr };
 
@@ -64,6 +65,25 @@ void metamod_startup()
 	if (!meta_init_gamedll()) {
 		Sys_Error("Failure to init game DLL; exiting...");
 	}
+	META_CONS("== diag: gamedir=%s name=%s", g_GameDLL.gamedir, g_GameDLL.name);
+	META_CONS("== diag: configdir=%s", g_config->directory());
+
+	// Android: amxmodx uses relative paths (e.g. "cstrike/addons/...") via
+	// build_pathname_r which stat()/fopen() resolve from CWD.  Ensure CWD is
+	// the parent of gamedir (the game root) so those relative paths work.
+	if (g_GameDLL.gamedir[0]) {
+		char cwd_buf[MAX_PATH];
+		Q_strlcpy(cwd_buf, g_GameDLL.gamedir);
+		char *last_slash = Q_strrchr(cwd_buf, '/');
+		if (last_slash) {
+			*last_slash = '\0';
+			if (chdir(cwd_buf) == 0) {
+				META_CONS("== diag: chdir(%s) OK", cwd_buf);
+			} else {
+				META_CONS("== diag: chdir(%s) FAILED: %s", cwd_buf, strerror(errno));
+			}
+		}
+	}
 
 	g_metamod_active = true;
 
@@ -106,6 +126,10 @@ void metamod_startup()
 		if (!is_file_exists_in_gamedir(configFile)) {
 			META_DEBUG(2, "No config.ini file found: %s", CONFIG_INI);
 		}
+	}
+	// Android: config lives in gamedir/addons/metamod/, not APK native dir
+	if (!is_file_exists_in_gamedir(configFile) && g_GameDLL.gamedir[0]) {
+		Q_snprintf(configFile, sizeof configFile, "%s/addons/metamod/%s", g_GameDLL.gamedir, CONFIG_INI);
 	}
 
 	// Load config file
@@ -204,19 +228,8 @@ void metamod_startup()
 	}
 
 	// Load plugins file
-	if (!is_file_exists_in_gamedir(pluginFile)) {
-		Q_strlcpy(pluginFile, g_config->directory());
-
-		// Get out of sub directory and check
-		char *dir = Q_strrchr(pluginFile, '/');
-		if (dir) {
-			*dir = '\0';
-		}
-
-		Q_strcat(pluginFile, "/" PLUGINS_INI);
-		if (!is_file_exists_in_gamedir(pluginFile)) {
-			META_DEBUG(2, "No plugins.ini file found: %s", PLUGINS_INI);
-		}
+	if (!is_file_exists_in_gamedir(pluginFile) && g_GameDLL.gamedir[0]) {
+		Q_snprintf(pluginFile, sizeof pluginFile, "%s/addons/metamod/%s", g_GameDLL.gamedir, PLUGINS_INI);
 	}
 
 	g_plugins = new MPluginList(pluginFile);
@@ -401,6 +414,7 @@ bool get_function_table_old(const char* ifname, int ifvers_mm, table_t*& table, 
 bool meta_load_gamedll()
 {
 	if (!setup_gamedll(&g_GameDLL)) {
+		META_CONS("== diag: setup_gamedll failed name=%s", g_GameDLL.name);
 		META_ERROR("dll: Unrecognized game: %s", g_GameDLL.name);
 		// meta_errno should be already set in lookup_game()
 		return false;
@@ -408,6 +422,7 @@ bool meta_load_gamedll()
 
 	// open the game DLL
 	if (!g_GameDLL.sys_module.load(g_GameDLL.pathname)) {
+		META_CONS("== diag: dlopen FAILED path=%s err=%s", g_GameDLL.pathname, CSysModule::getloaderror());
 		META_ERROR("dll: Couldn't load game DLL %s: %s", g_GameDLL.pathname, CSysModule::getloaderror());
 		return false;
 	}

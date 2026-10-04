@@ -1,4 +1,30 @@
 #include "precompiled.h"
+#include <dlfcn.h>
+#include <unistd.h>
+#include <limits.h>
+#ifndef RTLD_DEEPBIND
+#define RTLD_DEEPBIND 0
+#endif
+#ifndef RTLD_NOLOAD
+#define RTLD_NOLOAD 0
+#endif
+// Directory holding the metamod shared object (the APK native lib dir) and its
+// bare filename. Derived once via dladdr on GiveFnptrsToDll so game DLLs
+// shipped beside metamod can be dlopen'd by absolute path on Android, where
+// relative config paths do not resolve within the app namespace.
+static char g_self_dir[PATH_MAX] = {0};
+static bool g_self_init = false;
+static void CSysModule_deriveSelfDir()
+{
+	if (g_self_init) return;
+	g_self_init = true;
+	Dl_info info;
+	if (dladdr((void *)GiveFnptrsToDll, &info) && info.dli_fname) {
+		Q_strlcpy(g_self_dir, info.dli_fname);
+		char *dir = Q_strrchr(g_self_dir, '/');
+		if (dir) *dir = '\0';
+	}
+}
 
 const module_handle_t CSysModule::INVALID_HANDLE = (module_handle_t)0;
 
@@ -145,27 +171,61 @@ module_handle_t CSysModule::load(const char *filepath)
 		m_handle = dlopen(filepath, RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
 		if (m_handle) m_free = true;
 
+		META_CONS("== load: dlopen(%s) -> %s", filepath, m_handle ? "OK" : getloaderror());
+
+		// Android: dlopen only resolves bare library names or absolute paths that
+		// live inside the app's trusted native namespace. Relative config paths
+		// (e.g. "dlls/libcs_android_arm64.so") will not resolve even though the
+		// game DLL sits right beside metamod in the APK native lib dir. On failure,
+		// retry by absolute path in that dir.
+		if (!m_handle) {
+			CSysModule_deriveSelfDir();
+			char base[NAME_MAX];
+			Q_strlcpy(base, filepath);
+			char *cp = Q_strrchr(base, '/');
+			if (cp) {
+				cp++;
+				char full[PATH_MAX];
+				if (g_self_dir[0]) {
+					Q_sprintf(full, "%s/%s", g_self_dir, cp);
+					m_handle = dlopen(full, RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
+					if (m_handle) m_free = true;
+					META_CONS("== load: fallback1(%s) -> %s", full, m_handle ? "OK" : getloaderror());
+				}
+				if (!m_handle) {
+					if (g_self_dir[0]) {
+						Q_sprintf(full, "%s/lib%s", g_self_dir, cp);
+					} else {
+						Q_sprintf(full, "lib%s", cp);
+					}
+					m_handle = dlopen(full, RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
+					if (m_handle) m_free = true;
+					META_CONS("== load: fallback2(%s) -> %s", full, m_handle ? "OK" : getloaderror());
+				}
+			}
+		}
+
 		char buf[1024], dummy[1024], path[260];
 		Q_sprintf(buf, "/proc/%i/maps", getpid());
 
 		FILE* fp = fopen(buf, "r");
+		if (fp) {
+			while (fgets(buf, sizeof buf, fp)) {
+				uintptr_t start, end;
 
-		while (fgets(buf, sizeof buf, fp)) {
-			uintptr_t start, end;
+				int args = sscanf(buf, "%lx-%lx %128s %128s %128s %128s %255s", &start, &end, dummy, dummy, dummy, dummy, path);
+				if (args != 7) {
+					continue;
+				}
 
-			int args = sscanf(buf, "%x-%x %128s %128s %128s %128s %255s", &start, &end, dummy, dummy, dummy, dummy, path);
-			if (args != 7) {
-				continue;
+				if (!Q_stricmp(path, filepath) || (m_handle && (Q_strstr(path, filepath) || Q_strstr(filepath, path)))) {
+					m_base = start;
+					m_size = end - start;
+					break;
+				}
 			}
-
-			if (!Q_stricmp(path, filepath)) {
-				m_base = start;
-				m_size = end - start;
-				break;
-			}
+			fclose(fp);
 		}
-
-		fclose(fp);
 	}
 
 	return m_handle;

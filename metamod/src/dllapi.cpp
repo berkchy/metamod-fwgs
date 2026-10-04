@@ -27,6 +27,11 @@ static BOOL mm_ClientConnect(edict_t *pEntity, const char *pszName, const char *
 static void MM_PRE_HOOK EXT_FUNC mm_ClientDisconnect(edict_t *pEntity)
 {
 	g_players.clear_player_cvar_query(pEntity);
+	// Forward to metamod plugins (AMXX fakemeta FM_ClientDisconnect) and to the
+	// game DLL's own ClientDisconnect. Without this, client-disconnect callbacks
+	// never fire on Xash3D and stale player state breaks plugins like ZP.
+	META_DLLAPI_HANDLE_void(FN_CLIENTDISCONNECT, pfnClientDisconnect, (pEntity));
+	RETURN_API_void();
 }
 
 // this forward can be disabled from metamod.cpp

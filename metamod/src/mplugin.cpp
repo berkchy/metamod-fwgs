@@ -746,6 +746,7 @@ bool MPlugin::query()
 {
 	// open the plugin DLL
 	if (!m_sys_module.load(m_pathname)) {
+		META_CONS("== query: load FAILED '%s' path=%s err=%s", m_desc, m_pathname, m_sys_module.getloaderror());
 		META_ERROR("dll: Failed query plugin '%s'; Couldn't open file '%s': %s", m_desc, m_pathname, m_sys_module.getloaderror());
 		return false;
 	}
@@ -762,6 +763,7 @@ bool MPlugin::query()
 	// GiveFnptrsToDll.
 	auto pfn_query = (META_QUERY_FN)m_sys_module.getsym("Meta_Query");
 	if (!pfn_query) {
+		META_CONS("== query: no Meta_Query in '%s'", m_desc);
 		META_ERROR("dll: Failed query plugin '%s'; Couldn't find Meta_Query(): %s", m_desc, "function not found");
 		// caller will dlclose()
 		return false;
@@ -794,6 +796,7 @@ bool MPlugin::query()
 	// pass on engine function table and globals to plugin
 	auto pfn_give_engfuncs = (GIVE_ENGINE_FUNCTIONS_FN)m_sys_module.getsym("GiveFnptrsToDll");
 	if (!pfn_give_engfuncs) {
+		META_CONS("== query: no GiveFnptrsToDll in '%s'", m_desc);
 		META_ERROR("dll: Failed query plugin '%s'; Couldn't find GiveFnptrsToDll(): %s", m_desc, "function not found");
 		return false;
 	}
@@ -810,6 +813,7 @@ bool MPlugin::query()
 	Q_memcpy(&m_mutil_funcs, &g_MetaUtilFunctions, sizeof m_mutil_funcs);
 
 	if (pfn_query(META_INTERFACE_VERSION, &m_info, &m_mutil_funcs) != TRUE) {
+		META_CONS("== query: Meta_Query returned FALSE for '%s'", m_desc);
 		META_ERROR("dll: Failed query plugin '%s'; Meta_Query returned error", m_desc);
 	}
 	else {
@@ -826,6 +830,7 @@ bool MPlugin::query()
 	// Note, this check is done regardless of whether meta_query returns an
 	// error.
 	if (!m_info) {
+		META_CONS("== query: empty info struct for '%s'", m_desc);
 		META_ERROR("dll: Failed query plugin '%s'; Empty info structure", m_desc);
 		// caller will dlclose()
 		return false;
