@@ -83,11 +83,23 @@ MPlugin* MPluginList::find(const char* findpath)
 }
 
 // Find a plugin that uses the given memory location.
+//
+// The address is matched against the module ranges the plugins were loaded
+// with, instead of asking the platform loader to resolve it: CSysModule::find()
+// has to dlopen() the path dladdr() reports (RTLD_NOLOAD does not exist on
+// Android, it is 0 there) which crashes inside the loader when the game DLLs
+// live in the APK rather than on disk. Attribution is best effort anyway - a
+// miss only means the cvar/command has no owning plugin recorded.
 MPlugin* MPluginList::find_memloc(void* memptr)
 {
-	module_handle_t ptr = CSysModule::find(memptr);
-	if (ptr != CSysModule::INVALID_HANDLE) {
-		return find(ptr);
+	if (!memptr)
+		return nullptr;
+
+	for (auto p : m_plugins) {
+		if (p->m_status < PL_VALID)
+			continue;
+		if (p->sys_module().contain(memptr))
+			return p;
 	}
 
 	return nullptr;

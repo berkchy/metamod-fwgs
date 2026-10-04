@@ -135,10 +135,23 @@ static ElfW(Addr) dlsize(void *base)
 	return end;
 }
 
+// Shared by load()/find(): resolve the module an address lives in. The Dl_info
+// must start zeroed - bionic leaves it untouched when the address belongs to no
+// module, so an uninitialized one hands a garbage path to dlopen() below.
+static bool CSysModule_addrInfo(void *addr, Dl_info *info)
+{
+	*info = Dl_info();
+	if (!addr || dladdr(addr, info) == 0 || !info->dli_fname) {
+		return false;
+	}
+
+	return true;
+}
+
 module_handle_t CSysModule::load(void *addr)
 {
 	Dl_info dlinfo;
-	if ((!dladdr(addr, &dlinfo) && !dlinfo.dli_fbase) || !dlinfo.dli_fname) {
+	if (!CSysModule_addrInfo(addr, &dlinfo)) {
 		return INVALID_HANDLE;
 	}
 
@@ -153,12 +166,12 @@ module_handle_t CSysModule::load(void *addr)
 module_handle_t CSysModule::find(void *addr)
 {
 	Dl_info dlinfo;
-	if ((!dladdr(addr, &dlinfo) && !dlinfo.dli_fbase) || !dlinfo.dli_fname) {
+	if (!CSysModule_addrInfo(addr, &dlinfo)) {
 		return INVALID_HANDLE;
 	}
 
-	module_handle_t hHandle = INVALID_HANDLE;
-	if (!(hHandle = dlopen(dlinfo.dli_fname, RTLD_NOW | RTLD_NOLOAD))) {
+	module_handle_t hHandle = dlopen(dlinfo.dli_fname, RTLD_NOW | RTLD_NOLOAD);
+	if (!hHandle) {
 		return INVALID_HANDLE;
 	}
 
@@ -225,6 +238,17 @@ module_handle_t CSysModule::load(const char *filepath)
 				}
 			}
 			fclose(fp);
+		}
+
+		// Prefer the loader's own view of the module: /proc/self/maps stops at
+		// the first matching segment, so a plugin whose data lives in a later
+		// segment would not be recognized by contain().
+		if (m_handle) {
+			Dl_info info;
+			if (CSysModule_addrInfo(m_handle, &info) && info.dli_fbase) {
+				m_base = (uintptr_t)info.dli_fbase;
+				m_size = (size_t)dlsize(m_handle);
+			}
 		}
 	}
 
